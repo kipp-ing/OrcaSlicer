@@ -6848,36 +6848,24 @@ LayerResult GCode::process_layer(const Print& print,
             // Sequential (by-object) mode invokes process_layer once per object,
             // so only brims of the objects printed in this pass may be consumed
             // here; brims of later objects are emitted when their own pass starts.
-            std::set<ObjectID> objs_printed_in_this_pass;
-            for (const LayerToPrint& layer_to_print : layers)
-                if (layer_to_print.object() != nullptr)
-                    objs_printed_in_this_pass.insert(layer_to_print.object()->id());
-            // Each brim is owned by its object's first-layer wall extruder
-            // (object_extruder_map, 1-based). Emit a brim only in its owner's
-            // iteration so every brim is printed with its own filament; brims
-            // of other extruders are left for their own iteration below.
-            for (std::set<ObjectID>::iterator brim_it = this->m_objsWithBrim.begin(); brim_it != this->m_objsWithBrim.end(); ) {
-                if (objs_printed_in_this_pass.find(*brim_it) == objs_printed_in_this_pass.end()) {
-                    ++brim_it;
+            std::set<ObjectID> objs_seen;
+            for (const LayerToPrint& layer_to_print : layers) {
+                const PrintObject* object = layer_to_print.object();
+                if (object == nullptr || !objs_seen.insert(object->id()).second)
                     continue;
-                }
-                std::map<ObjectID, unsigned int>::const_iterator obj_extruder_it = object_extruder_map.find(*brim_it);
-                if (obj_extruder_it == object_extruder_map.end() || obj_extruder_it->second != extruder_id + 1) {
-                    ++brim_it;
+                // Each brim is owned by its object's first-layer wall extruder
+                // (object_extruder_map, 1-based). Emit a brim only in its owner's
+                // iteration so every brim is printed with its own filament; brims
+                // of other extruders are left for their own iteration below.
+                const auto obj_extruder_it = object_extruder_map.find(object->id());
+                if (obj_extruder_it == object_extruder_map.end() || obj_extruder_it->second != extruder_id + 1)
                     continue;
-                }
-                std::map<ObjectID, ExtrusionEntityCollection>::const_iterator brim_map_it = print.m_brimMap.find(*brim_it);
-                if (brim_map_it != print.m_brimMap.end() && !brim_map_it->second.empty()) {
-                    this->set_origin(0., 0.);
-                    m_avoid_crossing_perimeters.use_external_mp();
-                    for (const ExtrusionEntity* ee : brim_map_it->second.entities) {
-                        gcode += this->extrude_entity(*ee, "brim", this->process_flow_value(m_config.support_speed));
-                    }
-                    m_avoid_crossing_perimeters.use_external_mp(false);
-                    m_avoid_crossing_perimeters.disable_once();
-                    brim_it = this->m_objsWithBrim.erase(brim_it);
-                } else {
-                    ++brim_it;
+                for (size_t instance_id = 0; instance_id < object->instances().size(); ++instance_id) {
+                    if (single_object_instance_idx != size_t(-1) && instance_id != single_object_instance_idx)
+                        continue;
+                    // Orca: keep the skirt -> brim order of the per-object preamble.
+                    gcode += generate_object_skirt_group(print, *object, instance_id, layer_tools, layer, extruder_id);
+                    gcode += generate_object_brim(print, *object, instance_id, first_layer);
                 }
             }
         }
