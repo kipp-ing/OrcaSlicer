@@ -5214,7 +5214,7 @@ void PrintConfigDef::init_fff_params()
     def->min = 1;
     def->max = 20;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionInt(3));
+    def->set_default_value(new ConfigOptionInt(2));
 
     def = this->add("draft_shield_first_layer_flow_ratio", coFloat);
     def->label = L("Draft shield first layer flow ratio");
