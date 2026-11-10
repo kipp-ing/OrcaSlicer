@@ -726,6 +726,8 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "single_loop_draft_shield"
             || opt_key == "draft_shield"
             || opt_key == "draft_shield_brim_width"
+            || opt_key == "draft_shield_fillet_width"
+            || opt_key == "draft_shield_fillet_layers"
             || opt_key == "skirt_distance"
             || opt_key == "skirt_start_angle"
             || opt_key == "ooze_prevention"

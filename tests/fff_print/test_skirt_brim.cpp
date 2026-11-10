@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <set>
 #include <string_view>
 
@@ -359,6 +360,56 @@ TEST_CASE("Draft shield brim is printed on the first layer only", "[SkirtBrim][D
     REQUIRE_FALSE(all_z.empty());
     REQUIRE(brim_z.size() == 1);
     CHECK(std::abs(*brim_z.begin() - *all_z.begin()) < 1e-6);
+    // The shield itself still rises with the object.
+    CHECK(skirt_z.size() == all_z.size());
+}
+
+// Snapmaker: stepped fillet between the draft shield and its brim (draft_shield_fillet_width/_layers).
+TEST_CASE("Draft shield fillet narrows over the layers above the brim", "[SkirtBrim][DraftShieldBrim]")
+{
+    DynamicPrintConfig config = draft_shield_brim_config(4.);
+    config.set_deserialize_strict({
+        { "draft_shield_fillet_width",  1.5 },
+        { "draft_shield_fillet_layers", 3 },
+    });
+    const std::string gcode    = Slic3r::Test::slice({ TestMesh::cube_20x20x20 }, config);
+    const std::string role_tag = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role);
+
+    std::string                role;
+    std::map<double, double>   brim_length; // print_z -> brim extrusion length
+    std::set<double>           skirt_z, all_z;
+    GCodeReader parser;
+    parser.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        if (boost::starts_with(line.raw(), role_tag)) {
+            role = std::string(line.raw().substr(role_tag.size()));
+            boost::trim(role);
+            return;
+        }
+        if (!line.extruding(self) || line.dist_XY(self) <= 0)
+            return;
+        all_z.insert(self.z());
+        if (role == ExtrusionEntity::role_to_string(erBrim))
+            brim_length[self.z()] += line.dist_XY(self);
+        else if (role == ExtrusionEntity::role_to_string(erSkirt))
+            skirt_z.insert(self.z());
+    });
+
+    REQUIRE(all_z.size() > 5);
+    // Brim on the first layer plus three fillet layers, nothing above.
+    REQUIRE(brim_length.size() == 4);
+    auto layer = all_z.begin();
+    for (const auto &[z, length] : brim_length) {
+        CHECK(std::abs(z - *layer) < 1e-6);
+        ++layer;
+    }
+    // Each fillet layer is narrower than the one below it.
+    std::vector<double> lengths;
+    for (const auto &[z, length] : brim_length)
+        lengths.push_back(length);
+    CHECK(lengths[0] > lengths[1]);
+    CHECK(lengths[1] > lengths[2]);
+    CHECK(lengths[2] > lengths[3]);
+    CHECK(lengths[3] > 0.);
     // The shield itself still rises with the object.
     CHECK(skirt_z.size() == all_z.size());
 }

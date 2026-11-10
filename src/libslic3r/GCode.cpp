@@ -5118,20 +5118,36 @@ std::string GCode::generate_skirt(const Print &print,
         m_avoid_crossing_perimeters.use_external_mp();
         Flow layer_skirt_flow = print.skirt_flow().with_height(float(skirt_done.back() - (skirt_done.size() == 1 ? 0. : skirt_done[skirt_done.size() - 2])));
         double mm3_per_mm = layer_skirt_flow.mm3_per_mm();
-        // Decide where to start looping:
-        // - If it’s the first layer or if we do NOT want a single-wall skirt/draft shield,
-        //   start from loops.first (all loops).
-        // - Otherwise, if single_loop_draft_shield == true (and not the first layer),
-        //   start from loops.second - 1 (just one loop).
-        const size_t start_idx = (first_layer || !print.m_config.single_loop_draft_shield)
-                                 ? loops.first
-                                 : (loops.second - 1);
+        // Snapmaker: draft shield brim loops (erBrim, outermost entries) are printed on the first layer. Above it,
+        // the loops next to the shield are continued as a stepped fillet that narrows linearly over
+        // draft_shield_fillet_layers layers, so the shield does not tear off its brim.
+        size_t fillet_loops = 0;
+        if (!first_layer && print.config().draft_shield_fillet_width.value > 0.) {
+            const size_t fillet_layers = size_t(std::max(1, print.config().draft_shield_fillet_layers.value));
+            // skirt_done holds the print_z of every shield layer printed so far, including this one.
+            const size_t fillet_layer  = skirt_done.size() - 1; // 1 = first layer above the bed layer
+            const double spacing       = print.skirt_flow().spacing();
+            if (fillet_layer >= 1 && fillet_layer <= fillet_layers && spacing > 0.) {
+                const double max_loops = std::max(1., std::round(print.config().draft_shield_fillet_width.value / spacing));
+                fillet_loops = size_t(std::ceil(max_loops * double(fillet_layers - fillet_layer + 1) / double(fillet_layers) - EPSILON));
+            }
+        }
 
         // Loop over the skirt loops and extrude
-        for (size_t i = start_idx; i < loops.second; ++i) {
-            // Snapmaker: draft shield brim loops (outermost entries) are printed on the first layer only.
-            if (!first_layer && skirt.entities[i]->role() == erBrim)
-                continue;
+        for (size_t i = loops.first; i < loops.second; ++i) {
+            if (!first_layer) {
+                if (skirt.entities[i]->role() == erBrim) {
+                    // Distance of this brim loop from the shield, in loops (1 = touching the shield).
+                    size_t loop_from_shield = 1;
+                    for (size_t j = i + 1; j < loops.second && skirt.entities[j]->role() == erBrim; ++j)
+                        ++loop_from_shield;
+                    if (loop_from_shield > fillet_loops)
+                        continue;
+                } else if (print.m_config.single_loop_draft_shield && i + 1 != loops.second) {
+                    // Single-wall skirt/draft shield above the first layer: only the innermost loop.
+                    continue;
+                }
+            }
             // Adjust flow according to this layer's layer height.
             ExtrusionLoop loop = *dynamic_cast<const ExtrusionLoop*>(skirt.entities[i]);
             for (ExtrusionPath &path : loop.paths) {
@@ -5147,11 +5163,6 @@ std::string GCode::generate_skirt(const Print &print,
             }
             else
                 gcode += this->extrude_loop(loop, "skirt", this->process_flow_value(m_config.support_speed));
-
-            // If we only want a single wall on non-first layers, break now
-            if (!first_layer && print.m_config.single_loop_draft_shield) {
-                break;
-            }
         }
         m_avoid_crossing_perimeters.use_external_mp(false);
         // Allow a straight travel move to the first object point if this is the first layer (but don't in next layers).

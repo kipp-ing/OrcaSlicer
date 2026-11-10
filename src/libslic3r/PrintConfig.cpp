@@ -5165,6 +5165,26 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.));
 
+    def = this->add("draft_shield_fillet_width", coFloat);
+    def->label = L("Draft shield fillet width");
+    def->tooltip = L("Width of a stepped fillet between the draft shield and its brim. Above the first layer, the brim loops "
+                     "next to the shield are continued and get narrower layer by layer, so the shield does not tear off its brim.\n"
+                     "Limited to the draft shield brim width. Set to 0 to disable.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
+    def = this->add("draft_shield_fillet_layers", coInt);
+    def->label = L("Draft shield fillet layers");
+    def->tooltip = L("Number of layers above the first layer over which the draft shield fillet narrows down to the shield.");
+    def->sidetext = L("layers");
+    def->min = 1;
+    def->max = 20;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(3));
+
     def = this->add("skirt_type", coEnum);
     def->label = L("Skirt type");
     def->full_label = L("Skirt type");
