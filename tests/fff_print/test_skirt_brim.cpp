@@ -414,6 +414,77 @@ TEST_CASE("Draft shield fillet narrows over the layers above the brim", "[SkirtB
     CHECK(skirt_z.size() == all_z.size());
 }
 
+// Snapmaker: on a bed too small for the full draft shield brim, the brim is cut at the bed edge instead of
+// running off the plate (which marks the plate as unprintable).
+TEST_CASE("Draft shield brim is clipped to the printable area", "[SkirtBrim][DraftShieldBrim]")
+{
+    // 40 x 40 mm bed, cube 10..30 mm. The shield (3 mm gap, 2 loops) stays on the bed, the 8 mm brim does not.
+    constexpr double bed_size = 40.;
+    DynamicPrintConfig config = draft_shield_brim_config(8.);
+    config.set_deserialize_strict({
+        { "printable_area",             "0x0,40x0,40x40,0x40" },
+        { "draft_shield_fillet_width",  1.5 },
+        { "draft_shield_fillet_layers", 3 },
+    });
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({ TestMesh::cube_20x20x20 }, print, model, config);
+    // Center the cube on the bed explicitly instead of relying on the arrangement.
+    ModelInstance *instance = model.objects.front()->instances.front();
+    const Vec3d    center   = model.objects.front()->instance_bounding_box(0).center();
+    instance->set_offset(instance->get_offset() + Vec3d(bed_size / 2. - center.x(), bed_size / 2. - center.y(), 0.));
+    DynamicPrintConfig full_config = Slic3r::Test::default_print_config();
+    full_config.apply(config);
+    print.apply(model, full_config);
+    const std::string gcode    = Slic3r::Test::gcode(print);
+    const std::string role_tag = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role);
+
+    std::string              role;
+    std::map<double, double> brim_length; // print_z -> brim extrusion length
+    double                   skirt_length_l1 = 0.;
+    BoundingBoxf             extents;
+    double                   first_z = -1.;
+    GCodeReader parser;
+    parser.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        if (boost::starts_with(line.raw(), role_tag)) {
+            role = std::string(line.raw().substr(role_tag.size()));
+            boost::trim(role);
+            return;
+        }
+        if (!line.extruding(self) || line.dist_XY(self) <= 0)
+            return;
+        if (first_z < 0.)
+            first_z = self.z();
+        extents.merge(Vec2d(self.x(), self.y()));
+        extents.merge(Vec2d(line.new_X(self), line.new_Y(self)));
+        if (role == ExtrusionEntity::role_to_string(erBrim))
+            brim_length[self.z()] += line.dist_XY(self);
+        else if (role == ExtrusionEntity::role_to_string(erSkirt) && std::abs(self.z() - first_z) < EPSILON)
+            skirt_length_l1 += line.dist_XY(self);
+    });
+
+    // Nothing is extruded off the bed.
+    REQUIRE(extents.defined);
+    CHECK(extents.min.x() >= 0.);
+    CHECK(extents.min.y() >= 0.);
+    CHECK(extents.max.x() <= bed_size);
+    CHECK(extents.max.y() <= bed_size);
+    // The brim is cut, not dropped: it still fills the bed up to its edge.
+    CHECK(extents.min.x() < 0.5);
+    CHECK(extents.max.x() > bed_size - 0.5);
+    // Brim on the first layer plus three narrowing fillet layers, as on a large bed.
+    REQUIRE(brim_length.size() == 4);
+    std::vector<double> lengths;
+    for (const auto &[z, length] : brim_length)
+        lengths.push_back(length);
+    CHECK(lengths[0] > lengths[1]);
+    CHECK(lengths[1] > lengths[2]);
+    CHECK(lengths[2] > lengths[3]);
+    CHECK(lengths[3] > 0.);
+    // The shield's own loops are complete: two closed loops at > 3 mm around the 20 mm cube, rounded corners.
+    CHECK(skirt_length_l1 > 2. * (4. * 20. + 2. * PI * 3.));
+}
+
 // Snapmaker: brim around the first layer of the supports (support_brim_width).
 namespace {
 

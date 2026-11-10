@@ -5148,6 +5148,16 @@ std::string GCode::generate_skirt(const Print &print,
                     continue;
                 }
             }
+            // Snapmaker: a draft shield brim loop cut at the bed edge is a collection of open brim paths.
+            if (const auto *clipped = dynamic_cast<const ExtrusionEntityCollection*>(skirt.entities[i])) {
+                for (const ExtrusionEntity *ee : clipped->entities) {
+                    ExtrusionPath path = *dynamic_cast<const ExtrusionPath*>(ee);
+                    path.height     = layer_skirt_flow.height();
+                    path.mm3_per_mm = mm3_per_mm;
+                    gcode += this->extrude_path(std::move(path), "skirt", this->process_flow_value(m_config.support_speed));
+                }
+                continue;
+            }
             // Adjust flow according to this layer's layer height.
             ExtrusionLoop loop = *dynamic_cast<const ExtrusionLoop*>(skirt.entities[i]);
             for (ExtrusionPath &path : loop.paths) {

@@ -2881,6 +2881,15 @@ void Print::_make_skirt()
     // Snapmaker: number of first-layer brim loops around the draft shield.
     const size_t draft_shield_brim_loops = (this->has_infinite_skirt() && m_config.draft_shield_brim_width.value > 0. && spacing > 0.f) ?
         size_t(std::ceil(m_config.draft_shield_brim_width.value / spacing - EPSILON)) : 0;
+    // Snapmaker: the draft shield brim is cut at the edge of the printable area (bed minus excluded areas)
+    // instead of running off the plate, so it also works where space is tight. Inset by half a line width
+    // to keep the extrusions on the bed.
+    ExPolygons draft_shield_brim_bed;
+    if (draft_shield_brim_loops > 0) {
+        Polygon bed;
+        bed.points = get_bed_shape(m_config);
+        draft_shield_brim_bed = offset_ex(diff_ex(Polygons{ bed }, get_bed_excluded_area(m_config)), -0.5f * float(flow.scaled_width()));
+    }
 
     std::vector<size_t> extruders;
     std::vector<double> extruders_e_per_mm;
@@ -2955,15 +2964,50 @@ void Print::_make_skirt()
             Geometry::simplify_polygons(loops, scale_(0.05), &loops);
             if (loops.empty())
                 break;
-            ExtrusionLoop eloop(elrSkirt);
-            eloop.paths.emplace_back(ExtrusionPath(erBrim, (float)mm3_per_mm, flow.width(), (float)initial_layer_print_height));
-            eloop.paths.back().polyline = loops.front().split_at_first_point();
-            dst.append(eloop);
+            Polygon &loop = loops.front();
+            const ExtrusionPath brim_path(erBrim, (float)mm3_per_mm, flow.width(), (float)initial_layer_print_height);
+            auto on_bed = [&draft_shield_brim_bed](const Point &pt) {
+                return std::any_of(draft_shield_brim_bed.begin(), draft_shield_brim_bed.end(),
+                                   [&pt](const ExPolygon &area) { return area.contains(pt); });
+            };
+            const auto off_bed = std::find_if_not(loop.points.begin(), loop.points.end(), on_bed);
+            if (off_bed == loop.points.end() && diff_pl(Polylines{ loop.split_at_first_point() }, draft_shield_brim_bed).empty()) {
+                ExtrusionLoop eloop(elrSkirt);
+                eloop.paths.emplace_back(brim_path);
+                eloop.paths.back().polyline = loop.split_at_first_point();
+                dst.append(eloop);
+                continue;
+            }
+            // The loop leaves the bed: keep the pieces on the bed instead of dropping the brim. Start the loop
+            // off the bed so that no piece is split at the loop's seam.
+            if (off_bed != loop.points.end())
+                std::rotate(loop.points.begin(), off_bed, loop.points.end());
+            Polylines pieces = intersection_pl(Polylines{ loop.split_at_first_point() }, draft_shield_brim_bed);
+            pieces.erase(std::remove_if(pieces.begin(), pieces.end(),
+                                        [&flow](const Polyline &pl) { return pl.length() < flow.scaled_width(); }),
+                         pieces.end());
+            if (pieces.empty())
+                // Completely off the bed. Only the outermost loops can be, so the fillet, which counts brim loops
+                // outward from the shield, is not affected by skipping it.
+                continue;
+            ExtrusionEntityCollection clipped;
+            clipped.no_sort = true;
+            for (Polyline &piece : chain_polylines(std::move(pieces))) {
+                ExtrusionPath path(brim_path);
+                path.polyline = std::move(piece);
+                clipped.append(std::move(path));
+            }
+            dst.append(std::move(clipped));
         }
 
-        if (collect_skirt_hull)
-            for (Polygon &poly : offset(hull, distance + 0.5f * float(scale_(spacing)), ClipperLib::jtRound, float(scale_(0.1))))
+        if (collect_skirt_hull) {
+            Polygons skirt_hull = offset(hull, distance + 0.5f * float(scale_(spacing)), ClipperLib::jtRound, float(scale_(0.1)));
+            if (!draft_shield_brim_bed.empty())
+                // Snapmaker: the draft shield brim stops at the bed edge, so does the occupied area.
+                skirt_hull = intersection(skirt_hull, offset(draft_shield_brim_bed, 0.5f * float(flow.scaled_width())));
+            for (Polygon &poly : skirt_hull)
                 append(m_skirt_convex_hull, std::move(poly.points));
+        }
     };
 
     m_skirt.clear();
