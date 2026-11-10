@@ -725,6 +725,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "min_skirt_length"
             || opt_key == "single_loop_draft_shield"
             || opt_key == "draft_shield"
+            || opt_key == "draft_shield_brim_width"
             || opt_key == "skirt_distance"
             || opt_key == "skirt_start_angle"
             || opt_key == "ooze_prevention"
@@ -2875,6 +2876,9 @@ void Print::_make_skirt()
     Flow   flow = this->skirt_flow();
     float  spacing = flow.spacing();
     double mm3_per_mm = flow.mm3_per_mm();
+    // Snapmaker: number of first-layer brim loops around the draft shield.
+    const size_t draft_shield_brim_loops = (this->has_infinite_skirt() && m_config.draft_shield_brim_width.value > 0. && spacing > 0.f) ?
+        size_t(std::ceil(m_config.draft_shield_brim_width.value / spacing - EPSILON)) : 0;
 
     std::vector<size_t> extruders;
     std::vector<double> extruders_e_per_mm;
@@ -2939,6 +2943,22 @@ void Print::_make_skirt()
             }
         }
 
+        // Snapmaker: brim around the outside of the draft shield. These loops are tagged erBrim and
+        // GCode::generate_skirt() prints them on the first layer only, so the shield keeps its wall
+        // count above the first layer while its footprint on the bed is widened against warping.
+        for (size_t i = draft_shield_brim_loops; i > 0 && !dst.empty(); --i) {
+            this->throw_if_canceled();
+            distance += float(scale_(spacing));
+            Polygons loops = offset(hull, distance, ClipperLib::jtRound, float(scale_(0.1)));
+            Geometry::simplify_polygons(loops, scale_(0.05), &loops);
+            if (loops.empty())
+                break;
+            ExtrusionLoop eloop(elrSkirt);
+            eloop.paths.emplace_back(ExtrusionPath(erBrim, (float)mm3_per_mm, flow.width(), (float)initial_layer_print_height));
+            eloop.paths.back().polyline = loops.front().split_at_first_point();
+            dst.append(eloop);
+        }
+
         if (collect_skirt_hull)
             for (Polygon &poly : offset(hull, distance + 0.5f * float(scale_(spacing)), ClipperLib::jtRound, float(scale_(0.1))))
                 append(m_skirt_convex_hull, std::move(poly.points));
@@ -2961,7 +2981,7 @@ void Print::_make_skirt()
         // Orca: Each object instance can emit skirt/brim. Wipe tower is only an
         // obstacle here; it may merge nearby items, but does not emit anything.
         std::vector<SkirtBrimGroupItem> group_items;
-        const coord_t grouping_offset = scale_(m_config.skirt_distance.value + m_config.skirt_loops.value * spacing);
+        const coord_t grouping_offset = scale_(m_config.skirt_distance.value + (m_config.skirt_loops.value + draft_shield_brim_loops) * spacing);
         for (const ObjectSkirtHull& object_hull : object_convex_hulls) {
             PrintObject* object = object_hull.object;
             std::vector<size_t> object_item_indices;

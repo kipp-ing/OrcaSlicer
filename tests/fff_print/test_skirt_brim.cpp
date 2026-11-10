@@ -3,9 +3,15 @@
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Geometry.hpp"
+#include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/Print.hpp"
+#include "libslic3r/Model.hpp"
 
 #include <boost/algorithm/string.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <set>
 #include <string_view>
 
 #include "test_data.hpp" // get access to init_print, etc
@@ -272,4 +278,87 @@ SCENARIO("Original Slic3r Skirt/Brim tests", "[SkirtBrim]") {
             }
         }
     }
+}
+
+// Snapmaker: brim around the draft shield (draft_shield_brim_width).
+namespace {
+
+DynamicPrintConfig draft_shield_brim_config(double brim_width)
+{
+    DynamicPrintConfig config = Slic3r::Test::default_print_config();
+    config.set_deserialize_strict({
+        { "skirt_loops",             2 },
+        { "skirt_distance",          3 },
+        { "draft_shield",            "enabled" },
+        { "draft_shield_brim_width", brim_width },
+        { "brim_type",               "no_brim" },
+        { "layer_height",            0.2 },
+        { "initial_layer_print_height", 0.2 },
+        { "gcode_comments",          true },
+    });
+    return config;
+}
+
+// Returns the skirt loop roles of the only skirt/brim group, outermost first.
+std::vector<ExtrusionRole> shield_loop_roles(double brim_width)
+{
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({ TestMesh::cube_20x20x20 }, print, model, draft_shield_brim_config(brim_width));
+    print.process();
+    REQUIRE(print.skirt_brim_groups().size() == 1);
+    std::vector<ExtrusionRole> roles;
+    for (const ExtrusionEntity *ee : print.skirt_brim_groups().front().skirt.entities)
+        roles.push_back(ee->role());
+    return roles;
+}
+
+} // namespace
+
+TEST_CASE("Draft shield brim adds outer first-layer loops", "[SkirtBrim][DraftShieldBrim]")
+{
+    SECTION("disabled by default") {
+        const std::vector<ExtrusionRole> roles = shield_loop_roles(0.);
+        CHECK(roles == std::vector<ExtrusionRole>{ erSkirt, erSkirt });
+    }
+    SECTION("brim loops sit outside the shield walls") {
+        const std::vector<ExtrusionRole> roles = shield_loop_roles(4.);
+        const size_t n_brim  = std::count(roles.begin(), roles.end(), erBrim);
+        const size_t n_skirt = std::count(roles.begin(), roles.end(), erSkirt);
+        CHECK(n_skirt == 2);
+        CHECK(n_brim >= 4); // 4 mm at well below 1 mm loop spacing
+        REQUIRE(roles.size() == n_brim + n_skirt);
+        // Outermost first: all brim loops precede the shield walls.
+        CHECK(std::is_partitioned(roles.begin(), roles.end(), [](ExtrusionRole r) { return r == erBrim; }));
+    }
+}
+
+TEST_CASE("Draft shield brim is printed on the first layer only", "[SkirtBrim][DraftShieldBrim]")
+{
+    const std::string gcode = Slic3r::Test::slice({ TestMesh::cube_20x20x20 }, draft_shield_brim_config(4.));
+    const std::string role_tag = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role);
+
+    std::string        role;
+    std::set<double>   brim_z, skirt_z, all_z;
+    GCodeReader parser;
+    parser.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        if (boost::starts_with(line.raw(), role_tag)) {
+            role = std::string(line.raw().substr(role_tag.size()));
+            boost::trim(role);
+            return;
+        }
+        if (!line.extruding(self) || line.dist_XY(self) <= 0)
+            return;
+        all_z.insert(self.z());
+        if (role == ExtrusionEntity::role_to_string(erBrim))
+            brim_z.insert(self.z());
+        else if (role == ExtrusionEntity::role_to_string(erSkirt))
+            skirt_z.insert(self.z());
+    });
+
+    REQUIRE_FALSE(all_z.empty());
+    REQUIRE(brim_z.size() == 1);
+    CHECK(std::abs(*brim_z.begin() - *all_z.begin()) < 1e-6);
+    // The shield itself still rises with the object.
+    CHECK(skirt_z.size() == all_z.size());
 }

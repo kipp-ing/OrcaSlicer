@@ -5129,6 +5129,9 @@ std::string GCode::generate_skirt(const Print &print,
 
         // Loop over the skirt loops and extrude
         for (size_t i = start_idx; i < loops.second; ++i) {
+            // Snapmaker: draft shield brim loops (outermost entries) are printed on the first layer only.
+            if (!first_layer && skirt.entities[i]->role() == erBrim)
+                continue;
             // Adjust flow according to this layer's layer height.
             ExtrusionLoop loop = *dynamic_cast<const ExtrusionLoop*>(skirt.entities[i]);
             for (ExtrusionPath &path : loop.paths) {

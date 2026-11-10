@@ -5140,6 +5140,18 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<DraftShield>(dsDisabled));
 
+    def = this->add("draft_shield_brim_width", coFloat);
+    def->label = L("Draft shield brim width");
+    def->tooltip = L("Width of a brim printed on the first layer around the outside of the draft shield. "
+                     "It keeps the draft shield from warping and lifting off the bed with materials such as ABS or ASA, "
+                     "so the shield keeps protecting the object.\n"
+                     "Only used when the draft shield is enabled. Set to 0 to disable.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 100;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
     def = this->add("skirt_type", coEnum);
     def->label = L("Skirt type");
     def->full_label = L("Skirt type");
