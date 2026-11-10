@@ -11030,6 +11030,23 @@ msgstr ""
 msgid "Brim width"
 msgstr "Randbreite"
 
+msgid "Support brim width"
+msgstr "Umrandungsbreite der Stützen"
+
+msgid ""
+"Width of a brim printed on the first layer around the supports. It helps "
+"supports that carry most of the object, such as with tilted parts, to stay "
+"on the bed with warping materials such as ABS or ASA. Where it touches the "
+"object brim, both are merged into one brim.\n"
+"Not used with a raft. Set to 0 to disable."
+msgstr ""
+"Breite einer Umrandung, die in der ersten Schicht um die Stützen gedruckt "
+"wird. Sie hilft Stützen, die einen Großteil des Objekts tragen, etwa bei "
+"schräg liegenden Teilen, bei Materialien wie ABS oder ASA auf dem Druckbett "
+"zu bleiben. Wo sie die Umrandung des Objekts berührt, werden beide zu einer "
+"Umrandung zusammengeführt.\n"
+"Wird mit einer Druckbasis (Raft) nicht verwendet. 0 deaktiviert sie."
+
 msgid "Distance from model to the outermost brim line."
 msgstr "Abstand vom Modell zur äußersten Randlinie"
 
