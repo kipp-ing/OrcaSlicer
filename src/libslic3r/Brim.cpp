@@ -418,6 +418,29 @@ static ExPolygons make_brim_ears(const PrintObject* object, const double& flowWi
     return mouse_ears_ex;
 }
 
+// Snapmaker: footprint of the supports on the bed (first layer), in object coordinates.
+// Empty if the object has no support layer on the first layer.
+static ExPolygons support_first_layer_footprint(const PrintObject& object, float closing_distance)
+{
+    if (object.support_layers().empty())
+        return {};
+    const SupportLayer* layer = object.support_layers().front();
+    if (layer->bottom_z() > EPSILON)
+        return {};
+    // Normal and organic tree supports store their first-layer areas in support_islands,
+    // hybrid tree supports in lslices. Fall back to the extrusions themselves.
+    ExPolygons footprint = layer->support_islands;
+    if (footprint.empty())
+        footprint = layer->lslices;
+    if (footprint.empty())
+        footprint = union_ex(layer->support_fills.polygons_covered_by_spacing());
+    if (footprint.empty())
+        return {};
+    // Close gaps between neighboring support islands / sparse first-layer lines, so the brim
+    // follows the outline of the support instead of filling the space between its lines.
+    return closing_ex(to_polygons(footprint), closing_distance, jtRound, SCALED_RESOLUTION);
+}
+
 //BBS: create all brims
 static ExPolygons outer_inner_brim_area(const Print& print,
     const float no_brim_offset, std::map<ObjectInstanceID, ExPolygons>& brimAreaMap,
@@ -605,7 +628,8 @@ static ExPolygons outer_inner_brim_area(const Print& print,
                 // BBS
                 if (!object->support_layers().empty() && object->support_layers().front()->support_type == stInnerTree) {
                     for (const ExPolygon &ex_poly : object->support_layers().front()->lslices) {
-                        if (!has_outer_brim)
+                        // Snapmaker: keep the ring around the support free for the support brim.
+                        if (!has_outer_brim && !object->has_support_brim())
                             append(no_brim_area_support, diff_ex(offset(ex_poly.contour, no_brim_offset), ex_poly.holes));
                         if (!has_inner_brim && !has_outer_brim)
                             append(no_brim_area_support, offset_ex(ex_poly.holes, -no_brim_offset));
@@ -615,8 +639,28 @@ static ExPolygons outer_inner_brim_area(const Print& print,
                         no_brim_area_support.emplace_back(ex_poly.contour);
                     }
                 }
+                // Snapmaker: brim around the supports' footprint. It touches the supports (no gap) and is stored
+                // with the object's brim of the same instance, so both merge into one brim where they meet.
+                ExPolygons brim_area_support;
+                ExPolygons support_footprint;
+                if (object->has_support_brim()) {
+                    support_footprint = support_first_layer_footprint(*object, flow.scaled_spacing());
+                    if (!support_footprint.empty()) {
+                        // Even number of lines like the object brim: the brim ring is filled concentrically from both
+                        // of its edges, an odd count would leave a one-line gap in the middle.
+                        const float support_brim_width = scale_(std::max(1., floor(object->config().support_brim_width.value / flowWidth / 2)) * flowWidth * 2);
+                        brim_area_support = diff_ex(offset_ex(support_footprint, support_brim_width, jtRound, SCALED_RESOLUTION), support_footprint);
+                        append(no_brim_area_support, support_footprint);
+                    }
+                }
                 brimToWrite.at(object->id()).sup = false;
-                for (const PrintInstance& instance : object->instances()) {
+                for (size_t instance_idx = 0; instance_idx < object->instances().size(); ++instance_idx) {
+                    const PrintInstance& instance = object->instances()[instance_idx];
+                    if (!brim_area_support.empty()) {
+                        append_and_translate(brim_area_support, instance, instance_idx, brimAreaMap);
+                        // The support brim is anchored on the support, not on the object.
+                        append_and_translate(objectIslands, support_footprint, instance);
+                    }
                     append_and_translate(no_brim_area, no_brim_area_support, instance);
                     append_and_translate(holes, holes_support, instance);
                 }

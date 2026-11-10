@@ -894,6 +894,7 @@ bool PrintObject::invalidate_state_by_config_options(
     bool invalidated = false;
     for (const t_config_option_key &opt_key : opt_keys) {
         if (   opt_key == "brim_width"
+            || opt_key == "support_brim_width"
             || opt_key == "brim_object_gap"
             || opt_key == "brim_use_efc_outline"
             || opt_key == "brim_type"

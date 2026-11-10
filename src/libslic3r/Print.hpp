@@ -416,11 +416,17 @@ public:
     const std::vector<groupedVolumeSlices>& firstLayerObjGroups() const { return firstLayerObjSliceByGroups; }
     std::vector<groupedVolumeSlices>& firstLayerObjGroupsMod() { return firstLayerObjSliceByGroups; }
 
-    bool                         has_brim() const       {
+    // Brim around the object's first layer (brim_type / brim_width).
+    bool                         has_object_brim() const {
         return ((this->config().brim_type != btNoBrim && this->config().brim_width.value > 0.) || this->config().brim_type == btAutoBrim
             || (this->config().brim_type == btPainted && !this->model_object()->brim_points.empty()))
             && ! this->has_raft();
     }
+    // Snapmaker: brim around the first layer of the supports (support_brim_width).
+    bool                         has_support_brim() const {
+        return this->config().support_brim_width.value > 0. && this->has_support() && ! this->has_raft();
+    }
+    bool                         has_brim() const       { return this->has_object_brim() || this->has_support_brim(); }
 
     // BBS
     const ExtrusionEntityCollection& object_skirt() const {

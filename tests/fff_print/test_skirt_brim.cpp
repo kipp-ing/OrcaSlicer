@@ -362,3 +362,123 @@ TEST_CASE("Draft shield brim is printed on the first layer only", "[SkirtBrim][D
     // The shield itself still rises with the object.
     CHECK(skirt_z.size() == all_z.size());
 }
+
+// Snapmaker: brim around the first layer of the supports (support_brim_width).
+namespace {
+
+// A thin pillar carrying a wide cap: the supports below the cap stand mostly outside the object's footprint.
+TriangleMesh mushroom_mesh()
+{
+    TriangleMesh pillar(its_make_cube(4., 4., 10.));
+    pillar.translate(13.f, 13.f, 0.f);
+    TriangleMesh cap(its_make_cube(30., 30., 2.));
+    cap.translate(0.f, 0.f, 10.f);
+    pillar.merge(cap);
+    return pillar;
+}
+
+// Size of the bounding box of all brim extrusions in mm, or 0 if there is no brim.
+// Optionally returns the size of the first support layer's extrusions and the x positions (mm, sorted)
+// of the brim lines crossing a horizontal band through the middle of the right edge of the support.
+Vec2d brim_size(const std::string &support_type, const std::string &brim_type, double support_brim_width,
+                Vec2d *support_size = nullptr, std::vector<double> *right_edge_brim_x = nullptr, double *brim_spacing = nullptr)
+{
+    DynamicPrintConfig config = Slic3r::Test::default_print_config();
+    config.set_deserialize_strict({
+        { "skirt_loops",          0 },
+        { "enable_support",       true },
+        { "support_type",         support_type },
+        { "raft_layers",          0 },
+        { "brim_type",            brim_type },
+        { "brim_width",           3 },
+        { "brim_object_gap",      0 },
+        { "support_brim_width",   support_brim_width },
+        { "layer_height",         0.2 },
+        { "initial_layer_print_height", 0.2 },
+    });
+    Print print;
+    Slic3r::Test::init_and_process_print({ mushroom_mesh() }, print, config);
+    BoundingBox bbox;
+    for (const auto &[_, brim] : print.get_brimMap())
+        for (const ExtrusionEntity *ee : brim.entities)
+            for (const Polyline &pl : ee->as_polylines())
+                bbox.merge(get_extents(pl));
+    if (brim_spacing != nullptr)
+        *brim_spacing = print.brim_flow().spacing();
+    if (support_size != nullptr) {
+        BoundingBox sbox;
+        const PrintObject *object = print.objects().front();
+        if (!object->support_layers().empty())
+            for (const Polyline &pl : object->support_layers().front()->support_fills.as_polylines())
+                sbox.merge(get_extents(pl));
+        *support_size = sbox.defined ? unscale(sbox.size()) : Vec2d::Zero();
+        if (right_edge_brim_x != nullptr && sbox.defined) {
+            const coord_t cy = sbox.center().y();
+            for (const auto &[_, brim] : print.get_brimMap())
+                for (const ExtrusionEntity *ee : brim.entities)
+                    for (const Polyline &pl : ee->as_polylines())
+                        for (const Point &pt : pl.points)
+                            if (pt.x() > sbox.max.x() && std::abs(pt.y() - cy) < scaled(5.))
+                                right_edge_brim_x->push_back(unscale<double>(pt.x()));
+            std::sort(right_edge_brim_x->begin(), right_edge_brim_x->end());
+        }
+    }
+    return bbox.defined ? unscale(bbox.size()) : Vec2d::Zero();
+}
+
+} // namespace
+
+TEST_CASE("Support brim surrounds the first layer of the supports", "[SkirtBrim][SupportBrim]")
+{
+    for (const std::string support_type : { "normal(auto)", "tree(auto)" }) {
+        SECTION(support_type) {
+            SECTION("disabled by default") {
+                CHECK(brim_size(support_type, "no_brim", 0.) == Vec2d::Zero());
+            }
+            SECTION("object brim alone stays around the pillar") {
+                // The support footprint blocks the object brim, so at most the pillar's brim remains
+                // (here usually nothing, as the supports enclose the pillar).
+                const Vec2d size = brim_size(support_type, "outer_only", 0.);
+                CHECK(size.x() < 4. + 2. * 3. + 1.);
+                CHECK(size.y() < 4. + 2. * 3. + 1.);
+            }
+            SECTION("support brim without object brim") {
+                const Vec2d size = brim_size(support_type, "no_brim", 3.);
+                UNSCOPED_INFO("support brim size " << size.x() << " x " << size.y());
+                // Supports spread far beyond the 4 mm pillar below the 30 mm cap.
+                CHECK(size.x() > 15.);
+                CHECK(size.y() > 15.);
+            }
+            SECTION("support brim and object brim together") {
+                const Vec2d support_only = brim_size(support_type, "no_brim", 3.);
+                const Vec2d combined     = brim_size(support_type, "outer_only", 3.);
+                CHECK(combined.x() >= support_only.x() - EPSILON);
+                CHECK(combined.y() >= support_only.y() - EPSILON);
+            }
+        }
+    }
+}
+
+TEST_CASE("Support brim covers the support footprint of normal support", "[SkirtBrim][SupportBrim]")
+{
+    // Normal support fills the whole area below the cap, so the brim reaches past the cap's 30 mm.
+    Vec2d support_size;
+    const Vec2d size = brim_size("normal(auto)", "no_brim", 3., &support_size);
+    UNSCOPED_INFO("support " << support_size.x() << " x " << support_size.y() << ", brim " << size.x() << " x " << size.y());
+    CHECK(size.x() > 30.);
+    CHECK(size.y() > 30.);
+    // The brim lines follow each other without a gap (an odd line count used to drop the middle line).
+    Vec2d unused;
+    std::vector<double> xs;
+    double spacing = 0.;
+    brim_size("normal(auto)", "no_brim", 3., &unused, &xs, &spacing);
+    REQUIRE(xs.size() >= 2);
+    double max_step = 0.;
+    for (size_t i = 1; i < xs.size(); ++i)
+        max_step = std::max(max_step, xs[i] - xs[i - 1]);
+    UNSCOPED_INFO("brim x positions " << xs.front() << " .. " << xs.back() << ", max step " << max_step << ", spacing " << spacing);
+    CHECK(max_step < 1.5 * spacing);
+    // The brim adds about its width on each side of the support (centerlines, so minus one line).
+    CHECK(std::abs((size.x() - support_size.x()) / 2. - 3.) < 1.);
+    CHECK(std::abs((size.y() - support_size.y()) / 2. - 3.) < 1.);
+}

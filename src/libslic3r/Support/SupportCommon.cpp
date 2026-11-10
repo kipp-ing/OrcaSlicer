@@ -367,7 +367,7 @@ SupportGeneratorLayersPtr generate_raft_base(
 {
     // If there is brim to be generated, calculate the trimming regions.
     Polygons brim;
-    if (object.has_brim()) {
+    if (object.has_object_brim()) {
         // The object does not have a raft.
         // Calculate the area covered by the brim.
         const BrimType brim_type       = object.config().brim_type;

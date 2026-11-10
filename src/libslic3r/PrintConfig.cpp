@@ -1406,6 +1406,19 @@ void PrintConfigDef::init_fff_params()
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionFloat(0.));
 
+    def = this->add("support_brim_width", coFloat);
+    def->label = L("Support brim width");
+    def->category = L("Support");
+    def->tooltip = L("Width of a brim printed on the first layer around the supports. "
+                     "It helps supports that carry most of the object, such as with tilted parts, to stay on the bed "
+                     "with warping materials such as ABS or ASA. Where it touches the object brim, both are merged into one brim.\n"
+                     "Not used with a raft. Set to 0 to disable.");
+    def->sidetext = "mm";	// milimeters, don't need translation
+    def->min = 0;
+    def->max = 100;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
     def = this->add("brim_type", coEnum);
     def->label = L("Brim type");
     def->category = L("Support");

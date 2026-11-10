@@ -897,6 +897,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                brim_use_efc_outline))
     ((ConfigOptionEnum<BrimType>,      brim_type))
     ((ConfigOptionFloat,               brim_width))
+    ((ConfigOptionFloat,               support_brim_width))
     ((ConfigOptionFloat,               brim_ears_detection_length))
     ((ConfigOptionFloat,               brim_ears_max_angle))
     ((ConfigOptionFloat,               skirt_start_angle))
