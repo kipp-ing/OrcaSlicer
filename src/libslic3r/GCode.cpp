@@ -5133,6 +5133,20 @@ std::string GCode::generate_skirt(const Print &print,
             }
         }
 
+        // Snapmaker: the bed layer and the fillet layers print at the skirt speed, the fillet loops included (they
+        // would otherwise run at the support speed). Above them the shield walls may print at draft_shield_speed.
+        const size_t shield_layer = skirt_done.size() - 1; // 0 = bed layer
+        const size_t slow_layers  = (print.config().draft_shield_brim_width.value > 0. && print.config().draft_shield_fillet_width.value > 0.) ?
+            size_t(std::max(1, print.config().draft_shield_fillet_layers.value)) : 0;
+        const double skirt_speed  = m_config.get_abs_value("skirt_speed");
+        const double loop_speed   = this->process_flow_value(m_config.support_speed);
+        const double fillet_speed = skirt_speed > 0. ? skirt_speed : loop_speed;
+        if (print.has_infinite_skirt() && print.config().draft_shield_speed.value > 0. && shield_layer > slow_layers)
+            m_skirt_speed_override = print.config().draft_shield_speed.value;
+        auto speed_for = [&](const ExtrusionEntity *entity) {
+            return !first_layer && entity->role() == erBrim ? fillet_speed : loop_speed;
+        };
+
         // Loop over the skirt loops and extrude
         for (size_t i = loops.first; i < loops.second; ++i) {
             if (!first_layer) {
@@ -5154,7 +5168,7 @@ std::string GCode::generate_skirt(const Print &print,
                     ExtrusionPath path = *dynamic_cast<const ExtrusionPath*>(ee);
                     path.height     = layer_skirt_flow.height();
                     path.mm3_per_mm = mm3_per_mm;
-                    gcode += this->extrude_path(std::move(path), "skirt", this->process_flow_value(m_config.support_speed));
+                    gcode += this->extrude_path(std::move(path), "skirt", speed_for(clipped));
                 }
                 continue;
             }
@@ -5169,11 +5183,12 @@ std::string GCode::generate_skirt(const Print &print,
             if (first_layer && i==loops.first) {
                 //set skirt start point location
                 const Point desired_start_point = Skirt::find_start_point(loop, skirt_start_angle);
-                gcode += this->extrude_loop(loop, "skirt", this->process_flow_value(m_config.support_speed), {}, &desired_start_point);
+                gcode += this->extrude_loop(loop, "skirt", speed_for(skirt.entities[i]), {}, &desired_start_point);
             }
             else
-                gcode += this->extrude_loop(loop, "skirt", this->process_flow_value(m_config.support_speed));
+                gcode += this->extrude_loop(loop, "skirt", speed_for(skirt.entities[i]));
         }
+        m_skirt_speed_override = 0.;
         m_avoid_crossing_perimeters.use_external_mp(false);
         // Allow a straight travel move to the first object point if this is the first layer (but don't in next layers).
         if (first_layer && loops.first == 0)
@@ -8124,7 +8139,8 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
     }
     // Override skirt speed if set
     if (path.role() == erSkirt) {
-        const double skirt_speed = m_config.get_abs_value("skirt_speed");
+        // Snapmaker: draft_shield_speed above the draft shield's bottom layers, see generate_skirt().
+        const double skirt_speed = m_skirt_speed_override > 0. ? m_skirt_speed_override : m_config.get_abs_value("skirt_speed");
         if (skirt_speed > 0.0)
             speed = skirt_speed;
     }

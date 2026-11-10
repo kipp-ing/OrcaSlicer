@@ -5214,6 +5214,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(3));
 
+    def = this->add("draft_shield_speed", coFloat);
+    def->label = L("Draft shield speed");
+    def->tooltip = L("Speed of the draft shield walls above its first layer and its fillet layers. These bottom layers keep the "
+                     "skirt speed for good adhesion, the fillet included; the thin shield walls above them can be printed faster.\n"
+                     "Set to 0 to use the skirt speed on all layers.");
+    def->sidetext = "mm/s";	// milimeters per second, don't need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
     def = this->add("skirt_type", coEnum);
     def->label = L("Skirt type");
     def->full_label = L("Skirt type");

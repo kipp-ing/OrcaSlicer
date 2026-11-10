@@ -731,6 +731,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "draft_shield_wave_amplitude"
             || opt_key == "draft_shield_wave_length"
             || opt_key == "draft_shield_wave_count"
+            || opt_key == "draft_shield_speed"
             || opt_key == "skirt_distance"
             || opt_key == "skirt_start_angle"
             || opt_key == "ooze_prevention"

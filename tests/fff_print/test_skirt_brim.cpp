@@ -486,6 +486,55 @@ TEST_CASE("Draft shield brim is clipped to the printable area", "[SkirtBrim][Dra
     CHECK(skirt_length_l1 > 2. * (4. * 20. + 2. * PI * 3.));
 }
 
+// Snapmaker: draft shield walls above the bed and fillet layers at draft_shield_speed.
+TEST_CASE("Draft shield speeds up above its fillet", "[SkirtBrim][DraftShieldBrim]")
+{
+    DynamicPrintConfig config = draft_shield_brim_config(4.);
+    config.set_deserialize_strict({
+        { "draft_shield_fillet_width",     1.5 },
+        { "draft_shield_fillet_layers",    3 },
+        { "skirt_speed",                   30 },
+        { "draft_shield_speed",            120 },
+        { "support_speed",                 90 },
+        { "initial_layer_speed",           20 },
+        { "filament_max_volumetric_speed", 100 },
+        { "slow_down_for_layer_cooling",   false },
+    });
+    const std::string gcode    = Slic3r::Test::slice({ TestMesh::cube_20x20x20 }, config);
+    const std::string role_tag = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role);
+
+    std::string                           role;
+    std::map<double, std::set<long>>      skirt_f, brim_f; // print_z -> feedrates (mm/s, rounded)
+    GCodeReader parser;
+    parser.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        if (boost::starts_with(line.raw(), role_tag)) {
+            role = std::string(line.raw().substr(role_tag.size()));
+            boost::trim(role);
+            return;
+        }
+        if (!line.extruding(self) || line.dist_XY(self) <= 0)
+            return;
+        const long f = std::lround(line.new_F(self) / 60.);
+        if (role == ExtrusionEntity::role_to_string(erSkirt))
+            skirt_f[self.z()].insert(f);
+        else if (role == ExtrusionEntity::role_to_string(erBrim))
+            brim_f[self.z()].insert(f);
+    });
+
+    REQUIRE(skirt_f.size() > 6);
+    size_t layer = 0;
+    for (const auto &[z, speeds] : skirt_f) {
+        CAPTURE(layer, z);
+        // Bed layer + 3 fillet layers at the skirt speed, above them at the draft shield speed.
+        CHECK(speeds == std::set<long>{ layer <= 3 ? 30 : 120 });
+        ++layer;
+    }
+    // The fillet loops follow the shield's speed instead of the support speed.
+    REQUIRE(brim_f.size() == 4);
+    for (auto it = std::next(brim_f.begin()); it != brim_f.end(); ++it)
+        CHECK(it->second == std::set<long>{ 30 });
+}
+
 // Snapmaker: bumps next to the draft shield's corners (draft_shield_wave_*).
 namespace {
 
