@@ -717,6 +717,9 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     toggle_field("draft_shield_fillet_width", have_shield_brim && config->opt_float("draft_shield_brim_width") > 0.);
     toggle_field("draft_shield_fillet_layers", have_shield_brim && config->opt_float("draft_shield_brim_width") > 0. &&
                                                    config->opt_float("draft_shield_fillet_width") > 0.);
+    toggle_field("draft_shield_wave_amplitude", have_shield_brim);
+    for (auto el : {"draft_shield_wave_length", "draft_shield_wave_count"})
+        toggle_field(el, have_shield_brim && config->opt_float("draft_shield_wave_amplitude") > 0.);
 
     bool have_brim = (config->opt_enum<BrimType>("brim_type") != btNoBrim);
     toggle_field("brim_object_gap", have_brim);

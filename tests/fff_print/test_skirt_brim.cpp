@@ -3,6 +3,7 @@
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Geometry.hpp"
+#include "libslic3r/Geometry/ConvexHull.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Model.hpp"
@@ -483,6 +484,175 @@ TEST_CASE("Draft shield brim is clipped to the printable area", "[SkirtBrim][Dra
     CHECK(lengths[3] > 0.);
     // The shield's own loops are complete: two closed loops at > 3 mm around the 20 mm cube, rounded corners.
     CHECK(skirt_length_l1 > 2. * (4. * 20. + 2. * PI * 3.));
+}
+
+// Snapmaker: bumps next to the draft shield's corners (draft_shield_wave_*).
+namespace {
+
+// Distance of a point to a closed polygon's outline.
+double distance_to_outline(const Polygon &polygon, const Point &pt)
+{
+    double d = std::numeric_limits<double>::max();
+    for (const Line &line : polygon.lines())
+        d = std::min(d, line.distance_to(pt));
+    return d;
+}
+
+// Runs of consecutive points (cyclic) lying farther than `threshold` outside `reference`; returns each run's middle point.
+Points bumps_outside(const Polygon &loop, const Polygon &reference, double threshold)
+{
+    const size_t      n = loop.points.size();
+    std::vector<bool> out(n);
+    for (size_t i = 0; i < n; ++i)
+        out[i] = !reference.contains(loop.points[i]) && distance_to_outline(reference, loop.points[i]) > threshold;
+    Points mids;
+    size_t first = 0;
+    while (first < n && out[first]) ++first; // start outside a run
+    if (first == n)
+        return mids;
+    for (size_t k = 0; k < n; ++k) {
+        size_t i = (first + k) % n;
+        if (out[i] && !out[(i + n - 1) % n]) {
+            size_t len = 0;
+            while (out[(i + len) % n]) ++len;
+            mids.push_back(loop.points[(i + len / 2) % n]);
+        }
+    }
+    return mids;
+}
+
+} // namespace
+
+TEST_CASE("Draft shield waves sit on the long sides next to the sharp corners", "[SkirtBrim][DraftShieldWave]")
+{
+    // Hull like a long bracket: 170 mm bottom side, 20 mm ends, top bent by 15 degrees in the middle.
+    const Polygon hull({ { scaled(0.), scaled(0.) }, { scaled(170.), scaled(0.) }, { scaled(170.), scaled(20.) },
+                         { scaled(85.), scaled(31.2) }, { scaled(0.), scaled(20.) } });
+    Polygons rounded = offset(hull, float(scaled(3.)), ClipperLib::jtRound, float(scaled(0.1)));
+    REQUIRE(rounded.size() == 1);
+    const Polygon &loop = rounded.front();
+
+    constexpr double amplitude = 2., wave_length = 10.;
+    SECTION("disabled with zero amplitude") {
+        CHECK(draft_shield_waves(loop, 0., wave_length, 2).points.size() == loop.points.size());
+    }
+    SECTION("two bumps next to each of the four outer corners") {
+        const Polygon wavy = draft_shield_waves(loop, amplitude, wave_length, 2);
+        // Outward only: the wavy loop contains the original one.
+        double inside_area = 0.;
+        for (const Polygon &sliver : diff(Polygons{ loop }, Polygons{ wavy }))
+            inside_area += std::abs(sliver.area());
+        CHECK(inside_area * SCALING_FACTOR * SCALING_FACTOR < 0.001); // mm^2, rounding slivers only
+        // Bumps reach the full amplitude.
+        double max_out = 0.;
+        for (const Point &pt : wavy.points)
+            max_out = std::max(max_out, distance_to_outline(loop, pt));
+        CHECK(std::abs(unscaled(max_out) - amplitude) < 0.05);
+
+        const Points bumps = bumps_outside(wavy, loop, scaled(amplitude / 2.));
+        REQUIRE(bumps.size() == 8);
+        const Points outer_corners{ { scaled(0.), scaled(0.) }, { scaled(170.), scaled(0.) },
+                                    { scaled(170.), scaled(20.) }, { scaled(0.), scaled(20.) } };
+        const Point  bend{ scaled(85.), scaled(31.2) };
+        std::map<size_t, int> per_corner;
+        for (const Point &bump : bumps) {
+            size_t nearest = 0;
+            for (size_t c = 1; c < outer_corners.size(); ++c)
+                if ((bump - outer_corners[c]).cast<double>().norm() < (bump - outer_corners[nearest]).cast<double>().norm())
+                    nearest = c;
+            // Within corner gap + two bumps of the corner, far from the shallow bend.
+            CHECK(unscaled((bump - outer_corners[nearest]).cast<double>().norm()) < 3. + 2.5 + 2. * wave_length);
+            CHECK(unscaled((bump - bend).cast<double>().norm()) > 40.);
+            ++per_corner[nearest];
+            // On the long sides, not on the 20 mm ends.
+            CHECK(unscaled(bump.x()) > 0.);
+            CHECK(unscaled(bump.x()) < 170.);
+        }
+        CHECK(per_corner == std::map<size_t, int>{ { 0, 2 }, { 1, 2 }, { 2, 2 }, { 3, 2 } });
+    }
+    SECTION("both long sides get bumps at a rounded end") {
+        // Long bottom side, a shorter top side (about half as long) bent by ~10 degrees, rounded right end.
+        Points pts{ { scaled(0.), scaled(0.) }, { scaled(170.), scaled(0.) }, { scaled(80.), scaled(30.) }, { scaled(0.), scaled(15.) } };
+        for (int k = 0; k <= 16; ++k) {
+            const double a = -PI / 2. + PI * k / 16.;
+            pts.emplace_back(scaled(170. + 15. * std::cos(a)), scaled(15. + 15. * std::sin(a)));
+        }
+        Polygons rounded_end = offset(Geometry::convex_hull(pts), float(scaled(3.)), ClipperLib::jtRound, float(scaled(0.1)));
+        const Polygon wavy  = draft_shield_waves(rounded_end.front(), amplitude, wave_length, 2);
+        const Points  bumps = bumps_outside(wavy, rounded_end.front(), scaled(amplitude / 2.));
+        CHECK(bumps.size() == 8);
+        // Two on the top side next to the rounded end, two on the bottom side next to it.
+        CHECK(std::count_if(bumps.begin(), bumps.end(), [](const Point &p) { return p.x() > scaled(140.) && p.y() > scaled(15.); }) == 2);
+        CHECK(std::count_if(bumps.begin(), bumps.end(), [](const Point &p) { return p.x() > scaled(140.) && p.y() < scaled(15.); }) == 2);
+        // None at the shallow bend.
+        CHECK(std::none_of(bumps.begin(), bumps.end(), [](const Point &p) { return std::abs(unscaled(p.x()) - 80.) < 15.; }));
+    }
+    SECTION("equally long sides both get bumps") {
+        Polygons square = offset(Polygon({ { 0, 0 }, { scaled(60.), 0 }, { scaled(60.), scaled(60.) }, { 0, scaled(60.) } }),
+                                 float(scaled(3.)), ClipperLib::jtRound, float(scaled(0.1)));
+        const Polygon wavy = draft_shield_waves(square.front(), amplitude, wave_length, 1);
+        CHECK(bumps_outside(wavy, square.front(), scaled(amplitude / 2.)).size() == 8);
+    }
+    SECTION("sides too short for a bump stay straight") {
+        Polygons small = offset(Polygon({ { 0, 0 }, { scaled(12.), 0 }, { scaled(12.), scaled(12.) }, { 0, scaled(12.) } }),
+                                float(scaled(3.)), ClipperLib::jtRound, float(scaled(0.1)));
+        CHECK(draft_shield_waves(small.front(), amplitude, wave_length, 2).points.size() == small.front().points.size());
+    }
+}
+
+TEST_CASE("Wavy draft shield walls stay parallel and keep the object gap", "[SkirtBrim][DraftShieldWave]")
+{
+    DynamicPrintConfig config = draft_shield_brim_config(3.);
+    config.set_deserialize_strict({
+        { "draft_shield_wave_amplitude", 2 },
+        { "draft_shield_wave_length",    10 },
+        { "draft_shield_wave_count",     2 },
+    });
+    Print print;
+    Model model;
+    TriangleMesh box(its_make_cube(60., 20., 5.));
+    Slic3r::Test::init_print({ box }, print, model, config);
+    print.process();
+    REQUIRE(print.skirt_brim_groups().size() == 1);
+    const ExtrusionEntitiesPtr &entities = print.skirt_brim_groups().front().skirt.entities;
+    REQUIRE(entities.size() >= 3);
+    auto loop_polygon = [&entities](size_t idx) {
+        const auto *loop = dynamic_cast<const ExtrusionLoop *>(entities[idx]);
+        REQUIRE(loop != nullptr);
+        return Polygon(loop->polygon());
+    };
+    // Innermost entries are the two shield walls.
+    const Polygon inner = loop_polygon(entities.size() - 1);
+    const Polygon outer = loop_polygon(entities.size() - 2);
+    REQUIRE(entities[entities.size() - 1]->role() == erSkirt);
+    REQUIRE(entities[entities.size() - 2]->role() == erSkirt);
+
+    // Object footprint in print coordinates.
+    BoundingBox object_box;
+    for (const PrintInstance &instance : print.objects().front()->instances())
+        for (const ExPolygon &expoly : print.objects().front()->layers().back()->lslices) {
+            Polygon contour = expoly.contour;
+            contour.translate(instance.shift);
+            object_box.merge(get_extents(contour));
+        }
+    const Polygon object = object_box.polygon();
+    const double  spacing = print.skirt_flow().spacing();
+
+    // Never closer to the object than without waves.
+    double min_gap = std::numeric_limits<double>::max(), max_gap = 0.;
+    for (const Point &pt : inner.points) {
+        min_gap = std::min(min_gap, unscaled(distance_to_outline(object, pt)));
+        max_gap = std::max(max_gap, unscaled(distance_to_outline(object, pt)));
+    }
+    CHECK(min_gap > 3. + spacing / 2. - 0.05);
+    // The bumps are there: 2 per corner on the 60 mm sides, none on the 20 mm ends.
+    CHECK(max_gap > 3. + spacing / 2. + 1.9);
+    CHECK(bumps_outside(inner, object_box.inflated(scaled(3. + spacing / 2.)).polygon(), scaled(1.)).size() == 8);
+    // The second wall follows the first at one line spacing everywhere.
+    double max_deviation = 0.;
+    for (const Point &pt : outer.points)
+        max_deviation = std::max(max_deviation, std::abs(unscaled(distance_to_outline(inner, pt)) - spacing));
+    CHECK(max_deviation < 0.08);
 }
 
 // Snapmaker: brim around the first layer of the supports (support_brim_width).

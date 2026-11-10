@@ -728,6 +728,9 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "draft_shield_brim_width"
             || opt_key == "draft_shield_fillet_width"
             || opt_key == "draft_shield_fillet_layers"
+            || opt_key == "draft_shield_wave_amplitude"
+            || opt_key == "draft_shield_wave_length"
+            || opt_key == "draft_shield_wave_count"
             || opt_key == "skirt_distance"
             || opt_key == "skirt_start_angle"
             || opt_key == "ooze_prevention"
@@ -2814,6 +2817,96 @@ std::string Print::export_gcode(const std::string& path_template, GCodeProcessor
     return path.c_str();
 }
 
+// Snapmaker: outward bumps in a convex draft shield loop next to its sharp corners. A long shield side shrinks
+// (ABS/ASA) and pulls the corners at its ends off the bed; a few bumps next to the corner act as an expansion
+// joint. Long sides are straight edges of at least a third of the longest one (short end sides carry little
+// stress and get no bumps). A corner is everything between two consecutive long sides, including short sides
+// and rounded ends; if it turns by at least 30 degrees, both long sides get bumps next to it. Shallow bends get
+// none. The bumps only bulge outward, so the gap to the object is kept.
+Polygon draft_shield_waves(const Polygon &loop_in, double amplitude_mm, double wave_length_mm, int waves_per_corner)
+{
+    Polygon loop = loop_in;
+    loop.make_counter_clockwise();
+    const size_t n = loop.points.size();
+    const double amplitude   = scale_(amplitude_mm);
+    const double wave_length = scale_(wave_length_mm);
+    if (n < 3 || amplitude <= 0. || wave_length <= 0. || waves_per_corner < 1)
+        return loop;
+
+    static constexpr double min_corner_turn  = PI / 6.; // 30 degrees
+    static constexpr double long_side_ratio  = 1. / 3.;  // of the longest side
+    const double            corner_margin    = 0.25 * wave_length; // straight run left between corner and first bump
+
+    auto edge = [&loop, n](size_t i) -> Vec2d { return (loop.points[(i + 1) % n] - loop.points[i]).cast<double>(); };
+    std::vector<double> length(n);
+    std::vector<bool>   is_side(n);
+    for (size_t i = 0; i < n; ++i)
+        length[i] = edge(i).norm();
+    const double min_side_length = std::max(wave_length + 2. * corner_margin,
+                                            long_side_ratio * *std::max_element(length.begin(), length.end()));
+    for (size_t i = 0; i < n; ++i)
+        is_side[i] = length[i] >= min_side_length;
+    // Turning angle at vertex i, between edge i - 1 and edge i (positive for a convex CCW loop).
+    auto turn_at = [&edge, n](size_t i) {
+        const Vec2d a = edge((i + n - 1) % n), b = edge(i);
+        return std::atan2(cross2(a, b), a.dot(b));
+    };
+
+    // Bump groups requested at the start / end of each side.
+    std::vector<bool> at_start(n, false), at_end(n, false);
+    for (size_t i = 0; i < n; ++i) {
+        if (!is_side[i])
+            continue;
+        // Next long side and the total turn of the corner between the two, over short sides and rounded ends.
+        size_t j    = (i + 1) % n;
+        double turn = turn_at(j);
+        while (!is_side[j]) {
+            j = (j + 1) % n;
+            turn += turn_at(j);
+        }
+        if (turn >= min_corner_turn) {
+            at_end[i]   = true;
+            at_start[j] = true;
+        }
+    }
+
+    const double step = std::max(scale_(0.5), wave_length / 32.);
+    Points       out;
+    out.reserve(n * 2);
+    for (size_t i = 0; i < n; ++i) {
+        const Point &a = loop.points[i];
+        out.push_back(a);
+        if (!at_start[i] && !at_end[i])
+            continue;
+        const Vec2d dir    = edge(i) / length[i];
+        const Vec2d normal(dir.y(), -dir.x()); // outward for a CCW loop
+        const int   groups = int(at_start[i]) + int(at_end[i]);
+        const int   waves  = std::min(waves_per_corner, int(std::floor((length[i] - 2. * corner_margin) / groups / wave_length)));
+        if (waves < 1)
+            continue;
+        // Positions along the side where bumps start.
+        std::vector<double> starts;
+        for (int k = 0; k < waves; ++k) {
+            if (at_start[i])
+                starts.push_back(corner_margin + k * wave_length);
+            if (at_end[i])
+                starts.push_back(length[i] - corner_margin - (k + 1) * wave_length);
+        }
+        std::sort(starts.begin(), starts.end());
+        const int steps = std::max(8, int(std::ceil(wave_length / step)));
+        for (double s : starts)
+            for (int k = 0; k <= steps; ++k) {
+                const double t = double(k) / steps;
+                const double h = 0.5 * amplitude * (1. - std::cos(2. * PI * t));
+                const Vec2d  p = a.cast<double>() + dir * (s + t * wave_length) + normal * h;
+                out.emplace_back(coord_t(std::round(p.x())), coord_t(std::round(p.y())));
+            }
+    }
+    Polygon result(std::move(out));
+    result.remove_duplicate_points();
+    return result;
+}
+
 void Print::_make_skirt()
 {
     const bool generate_skirt = this->has_skirt() || this->has_infinite_skirt();
@@ -2881,6 +2974,8 @@ void Print::_make_skirt()
     // Snapmaker: number of first-layer brim loops around the draft shield.
     const size_t draft_shield_brim_loops = (this->has_infinite_skirt() && m_config.draft_shield_brim_width.value > 0. && spacing > 0.f) ?
         size_t(std::ceil(m_config.draft_shield_brim_width.value / spacing - EPSILON)) : 0;
+    // Snapmaker: bumps next to the draft shield's corners against warping (draft_shield_waves()).
+    const bool draft_shield_waves_enabled = this->has_infinite_skirt() && m_config.draft_shield_wave_amplitude.value > 0.;
     // Snapmaker: the draft shield brim is cut at the edge of the printable area (bed minus excluded areas)
     // instead of running off the plate, so it also works where space is tight. Inset by half a line width
     // to keep the extrusions on the bed.
@@ -2909,6 +3004,24 @@ void Print::_make_skirt()
     // Loop while we have less skirts than required or any extruder hasn't reached the min length if any.
     auto append_skirt_loops_for_hull = [&](const Polygon& hull, ExtrusionEntityCollection& dst, bool collect_skirt_hull) {
         float distance = float(scale_(m_config.skirt_distance.value - spacing/2.));
+        // Snapmaker: optional bumps next to the draft shield's corners (draft_shield_waves()). They are put into the
+        // innermost shield loop; every loop outside it (shield, brim, fillet) is an offset of that loop, so the
+        // walls stay parallel and bonded.
+        const float first_distance = distance + float(scale_(spacing));
+        Polygons    wavy_base;
+        if (draft_shield_waves_enabled) {
+            Polygons base = offset(hull, first_distance, ClipperLib::jtRound, float(scale_(0.1)));
+            Geometry::simplify_polygons(base, scale_(0.05), &base);
+            if (!base.empty())
+                wavy_base.push_back(draft_shield_waves(base.front(), m_config.draft_shield_wave_amplitude.value,
+                                                       m_config.draft_shield_wave_length.value, m_config.draft_shield_wave_count.value));
+        }
+        auto loops_at = [&](float loop_distance) {
+            Polygons loops = wavy_base.empty() ? offset(hull, loop_distance, ClipperLib::jtRound, float(scale_(0.1))) :
+                                                 offset(wavy_base, loop_distance - first_distance, ClipperLib::jtRound, float(scale_(0.1)));
+            Geometry::simplify_polygons(loops, scale_(0.05), &loops);
+            return loops;
+        };
         std::vector<coordf_t> extruded_length(extruders.size(), 0.);
         for (size_t i = m_config.skirt_loops, extruder_idx = 0; i > 0; -- i) {
             this->throw_if_canceled();
@@ -2918,8 +3031,7 @@ void Print::_make_skirt()
             Polygon loop;
             {
                 // Orca: the hull already represents the occupied outline used for this skirt.
-                Polygons loops = offset(hull, distance, ClipperLib::jtRound, float(scale_(0.1)));
-                Geometry::simplify_polygons(loops, scale_(0.05), &loops);
+                Polygons loops = loops_at(distance);
 			    if (loops.empty())
 				    break;
 			    loop = loops.front();
@@ -2960,8 +3072,7 @@ void Print::_make_skirt()
         for (size_t i = draft_shield_brim_loops; i > 0 && !dst.empty(); --i) {
             this->throw_if_canceled();
             distance += float(scale_(spacing));
-            Polygons loops = offset(hull, distance, ClipperLib::jtRound, float(scale_(0.1)));
-            Geometry::simplify_polygons(loops, scale_(0.05), &loops);
+            Polygons loops = loops_at(distance);
             if (loops.empty())
                 break;
             Polygon &loop = loops.front();
@@ -3001,7 +3112,7 @@ void Print::_make_skirt()
         }
 
         if (collect_skirt_hull) {
-            Polygons skirt_hull = offset(hull, distance + 0.5f * float(scale_(spacing)), ClipperLib::jtRound, float(scale_(0.1)));
+            Polygons skirt_hull = loops_at(distance + 0.5f * float(scale_(spacing)));
             if (!draft_shield_brim_bed.empty())
                 // Snapmaker: the draft shield brim stops at the bed edge, so does the occupied area.
                 skirt_hull = intersection(skirt_hull, offset(draft_shield_brim_bed, 0.5f * float(flow.scaled_width())));
@@ -3027,7 +3138,8 @@ void Print::_make_skirt()
         // Orca: Each object instance can emit skirt/brim. Wipe tower is only an
         // obstacle here; it may merge nearby items, but does not emit anything.
         std::vector<SkirtBrimGroupItem> group_items;
-        const coord_t grouping_offset = scale_(m_config.skirt_distance.value + (m_config.skirt_loops.value + draft_shield_brim_loops) * spacing);
+        const coord_t grouping_offset = scale_(m_config.skirt_distance.value + (m_config.skirt_loops.value + draft_shield_brim_loops) * spacing +
+                                               (draft_shield_waves_enabled ? m_config.draft_shield_wave_amplitude.value : 0.));
         for (const ObjectSkirtHull& object_hull : object_convex_hulls) {
             PrintObject* object = object_hull.object;
             std::vector<size_t> object_item_indices;

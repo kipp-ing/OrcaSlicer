@@ -1139,6 +1139,9 @@ public:
 // BBS: map print object with its first layer's first extruder
 std::map<ObjectID, unsigned int> getObjectExtruderMap(const Print& print);
 
+// Snapmaker: outward bumps (expansion joints) in a convex draft shield loop next to its sharp corners.
+Polygon draft_shield_waves(const Polygon &loop, double amplitude_mm, double wave_length_mm, int waves_per_corner);
+
 
 } /* slic3r_Print_hpp_ */
 
