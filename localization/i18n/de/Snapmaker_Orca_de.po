@@ -14798,6 +14798,19 @@ msgstr ""
 "Anzahl der Perioden der Schlangenlinie an jeder spitzen Ecke des Luftzug-"
 "Schutzes. Ist die Seite zu kurz, werden weniger verwendet."
 
+msgid "Draft shield first layer flow ratio"
+msgstr "Flussverhältnis der ersten Schicht des Luftzug-Schutzes"
+
+msgid ""
+"Flow ratio of the draft shield's first layer, its walls and its brim. A "
+"little over-extrusion, such as 1.1, fuses the lines so the first layer does "
+"not tear apart while the shield warps."
+msgstr ""
+"Flussverhältnis der ersten Schicht des Luftzug-Schutzes, seiner Wände und "
+"seiner Umrandung. Etwas Überextrusion, etwa 1,1, verschmilzt die Linien, "
+"damit die erste Schicht nicht aufreißt, während sich der Luftzug-Schutz "
+"verzieht."
+
 msgid "Draft shield speed"
 msgstr "Geschwindigkeit des Luftzug-Schutzes"
 
