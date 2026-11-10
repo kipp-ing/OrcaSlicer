@@ -5118,6 +5118,10 @@ std::string GCode::generate_skirt(const Print &print,
         m_avoid_crossing_perimeters.use_external_mp();
         Flow layer_skirt_flow = print.skirt_flow().with_height(float(skirt_done.back() - (skirt_done.size() == 1 ? 0. : skirt_done[skirt_done.size() - 2])));
         double mm3_per_mm = layer_skirt_flow.mm3_per_mm();
+        // Snapmaker: the draft shield's first layer (walls and brim) may be over-extruded so its lines fuse and do
+        // not tear apart while the shield warps.
+        if (first_layer && print.has_infinite_skirt())
+            mm3_per_mm *= print.config().draft_shield_first_layer_flow_ratio.value;
         // Snapmaker: draft shield brim loops (erBrim, outermost entries) are printed on the first layer. Above it,
         // the loops next to the shield are continued as a stepped fillet that narrows linearly over
         // draft_shield_fillet_layers layers, so the shield does not tear off its brim.

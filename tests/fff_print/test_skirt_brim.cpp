@@ -535,6 +535,63 @@ TEST_CASE("Draft shield speeds up above its fillet", "[SkirtBrim][DraftShieldBri
         CHECK(it->second == std::set<long>{ 30 });
 }
 
+// Snapmaker: over-extruded first layer of the draft shield (draft_shield_first_layer_flow_ratio).
+TEST_CASE("Draft shield first layer flow ratio over-extrudes only the first layer", "[SkirtBrim][DraftShieldBrim]")
+{
+    // Extrusion per mm of the draft shield walls (erSkirt) and its brim (erBrim) on the first and the second layer.
+    auto e_per_mm = [](double flow_ratio) {
+        DynamicPrintConfig config = draft_shield_brim_config(3.);
+        config.set_deserialize_strict({
+            { "draft_shield_first_layer_flow_ratio", flow_ratio },
+            { "draft_shield_fillet_width",           1.5 },
+            { "draft_shield_fillet_layers",          2 },
+        });
+        const std::string gcode    = Slic3r::Test::slice({ TestMesh::cube_20x20x20 }, config);
+        const std::string role_tag = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role);
+        std::string                         role;
+        std::map<std::string, Vec2d>        sums; // "<role> <layer>" -> (E, XY)
+        std::vector<double>                 zs;
+        bool                                relative_e = false;
+        GCodeReader parser;
+        parser.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            if (boost::starts_with(line.raw(), role_tag)) {
+                role = std::string(line.raw().substr(role_tag.size()));
+                boost::trim(role);
+                return;
+            }
+            if (line.cmd_is("M83") || line.cmd_is("M82"))
+                relative_e = line.cmd_is("M83");
+            if (!line.cmd_is("G1") || !line.has(Slic3r::E) || line.dist_XY(self) <= 0)
+                return;
+            const double e = relative_e ? line.e() : line.dist_E(self);
+            if (e <= 0)
+                return;
+            if (zs.empty() || std::abs(zs.back() - self.z()) > EPSILON)
+                zs.push_back(self.z());
+            if (zs.size() > 2)
+                return;
+            Vec2d &sum = sums[role + " " + std::to_string(zs.size())];
+            sum += Vec2d(e, line.dist_XY(self));
+        });
+        std::map<std::string, double> out;
+        for (const auto &[key, sum] : sums)
+            out[key] = sum.x() / sum.y();
+        return out;
+    };
+    const auto normal = e_per_mm(1.);
+    const auto over   = e_per_mm(1.1);
+    const std::string skirt = ExtrusionEntity::role_to_string(erSkirt), brim = ExtrusionEntity::role_to_string(erBrim);
+    for (const std::string &key : { skirt + " 1", brim + " 1", skirt + " 2", brim + " 2" }) {
+        CAPTURE(key);
+        REQUIRE(normal.count(key) == 1);
+        REQUIRE(over.count(key) == 1);
+    }
+    CHECK(std::abs(over.at(skirt + " 1") / normal.at(skirt + " 1") - 1.1) < 0.005);
+    CHECK(std::abs(over.at(brim + " 1") / normal.at(brim + " 1") - 1.1) < 0.005);
+    CHECK(std::abs(over.at(skirt + " 2") / normal.at(skirt + " 2") - 1.) < 0.005);
+    CHECK(std::abs(over.at(brim + " 2") / normal.at(brim + " 2") - 1.) < 0.005);
+}
+
 // Snapmaker: bumps next to the draft shield's corners (draft_shield_wave_*).
 namespace {
 

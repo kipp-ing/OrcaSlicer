@@ -3054,6 +3054,7 @@ optgroup->append_single_option_line("skirt_loops", "others_settings_skirt#loops"
         optgroup->append_single_option_line("draft_shield_wave_length", "others_settings_skirt#shield-wave-length");
         optgroup->append_single_option_line("draft_shield_wave_count", "others_settings_skirt#shield-wave-count");
         optgroup->append_single_option_line("draft_shield_speed", "others_settings_skirt#shield-speed");
+        optgroup->append_single_option_line("draft_shield_first_layer_flow_ratio", "others_settings_skirt#shield-first-layer-flow-ratio");
         optgroup->append_single_option_line("single_loop_draft_shield", "others_settings_skirt#single-loop-after-first-layer");
 
         optgroup = page->new_optgroup(L("Brim"), L"param_adhension");

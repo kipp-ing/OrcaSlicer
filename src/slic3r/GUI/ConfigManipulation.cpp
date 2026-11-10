@@ -719,6 +719,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
                                                    config->opt_float("draft_shield_fillet_width") > 0.);
     toggle_field("draft_shield_wave_amplitude", have_shield_brim);
     toggle_field("draft_shield_speed", have_shield_brim);
+    toggle_field("draft_shield_first_layer_flow_ratio", have_shield_brim);
     for (auto el : {"draft_shield_wave_length", "draft_shield_wave_count"})
         toggle_field(el, have_shield_brim && config->opt_float("draft_shield_wave_amplitude") > 0.);
 

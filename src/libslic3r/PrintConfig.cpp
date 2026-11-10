@@ -5216,6 +5216,15 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(3));
 
+    def = this->add("draft_shield_first_layer_flow_ratio", coFloat);
+    def->label = L("Draft shield first layer flow ratio");
+    def->tooltip = L("Flow ratio of the draft shield's first layer, its walls and its brim. A little over-extrusion, such as 1.1, "
+                     "fuses the lines so the first layer does not tear apart while the shield warps.");
+    def->min = 0.5;
+    def->max = 2;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.));
+
     def = this->add("draft_shield_speed", coFloat);
     def->label = L("Draft shield speed");
     def->tooltip = L("Speed of the draft shield walls above its first layer and its fillet layers. These bottom layers keep the "

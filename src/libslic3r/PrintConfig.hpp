@@ -1436,6 +1436,7 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloat,              draft_shield_wave_length))
     ((ConfigOptionInt,                draft_shield_wave_count))
     ((ConfigOptionFloat,              draft_shield_speed))
+    ((ConfigOptionFloat,              draft_shield_first_layer_flow_ratio))
     ((ConfigOptionFloat,              extruder_clearance_height_to_rod))//BBs
     ((ConfigOptionFloat,              extruder_clearance_height_to_lid))//BBS
     ((ConfigOptionFloat,              extruder_clearance_radius))
