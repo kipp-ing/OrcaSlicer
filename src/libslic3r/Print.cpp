@@ -2818,12 +2818,12 @@ std::string Print::export_gcode(const std::string& path_template, GCodeProcessor
     return path.c_str();
 }
 
-// Snapmaker: outward bumps in a convex draft shield loop next to its sharp corners. A long shield side shrinks
-// (ABS/ASA) and pulls the corners at its ends off the bed; a few bumps next to the corner act as an expansion
-// joint. Long sides are straight edges of at least a third of the longest one (short end sides carry little
+// Snapmaker: outward serpentines in a convex draft shield loop next to its sharp corners. A long shield side
+// shrinks (ABS/ASA) and pulls the corners at its ends off the bed; a serpentine of U-turns next to the corner acts
+// as a soft expansion joint: its legs stand across the side and bend instead of transferring the pull. Long sides are straight edges of at least a third of the longest one (short end sides carry little
 // stress and get no bumps). A corner is everything between two consecutive long sides, including short sides
 // and rounded ends; if it turns by at least 30 degrees, both long sides get bumps next to it. Shallow bends get
-// none. The bumps only bulge outward, so the gap to the object is kept.
+// none. The serpentines only reach outward, so the gap to the object is kept.
 Polygon draft_shield_waves(const Polygon &loop_in, double amplitude_mm, double wave_length_mm, int waves_per_corner)
 {
     Polygon loop = loop_in;
@@ -2871,7 +2871,10 @@ Polygon draft_shield_waves(const Polygon &loop_in, double amplitude_mm, double w
         }
     }
 
-    const double step = std::max(scale_(0.5), wave_length / 32.);
+    // Serpentine of U-turns: legs standing across the side, joined by semicircles of a quarter wave length radius.
+    // The bottom turns touch the shield line, the top turns reach out by the amplitude (at least two radii).
+    const double turn_radius = 0.25 * wave_length;
+    const double height      = std::max(amplitude, 2. * turn_radius);
     Points       out;
     out.reserve(n * 2);
     for (size_t i = 0; i < n; ++i) {
@@ -2885,23 +2888,39 @@ Polygon draft_shield_waves(const Polygon &loop_in, double amplitude_mm, double w
         const int   waves  = std::min(waves_per_corner, int(std::floor((length[i] - 2. * corner_margin) / groups / wave_length)));
         if (waves < 1)
             continue;
-        // Positions along the side where bumps start.
+        // Where the serpentines start along the side: next to the corner at the start and / or at the end.
         std::vector<double> starts;
-        for (int k = 0; k < waves; ++k) {
-            if (at_start[i])
-                starts.push_back(corner_margin + k * wave_length);
-            if (at_end[i])
-                starts.push_back(length[i] - corner_margin - (k + 1) * wave_length);
-        }
-        std::sort(starts.begin(), starts.end());
-        const int steps = std::max(8, int(std::ceil(wave_length / step)));
-        for (double s : starts)
-            for (int k = 0; k <= steps; ++k) {
-                const double t = double(k) / steps;
-                const double h = 0.5 * amplitude * (1. - std::cos(2. * PI * t));
-                const Vec2d  p = a.cast<double>() + dir * (s + t * wave_length) + normal * h;
-                out.emplace_back(coord_t(std::round(p.x())), coord_t(std::round(p.y())));
+        if (at_start[i])
+            starts.push_back(corner_margin);
+        if (at_end[i])
+            starts.push_back(length[i] - corner_margin - waves * wave_length);
+        auto emit = [&out, &a, &dir, &normal](double u, double v) {
+            const Vec2d p = a.cast<double>() + dir * u + normal * v;
+            out.emplace_back(coord_t(std::round(p.x())), coord_t(std::round(p.y())));
+        };
+        // Arc around (u, v) with radius r from angle t0 to t1 (u along the side, v outward).
+        auto arc = [&emit, r = turn_radius](double u, double v, double t0, double t1) {
+            const int n = std::max(2, int(std::ceil(std::abs(t1 - t0) / (PI / 12.))));
+            for (int k = 0; k <= n; ++k) {
+                const double t = t0 + (t1 - t0) * k / n;
+                emit(u + r * std::cos(t), v + r * std::sin(t));
             }
+        };
+        const double r = turn_radius;
+        for (double s : starts) {
+            // Rounded entry from the shield line into the first leg.
+            arc(s, r, -PI / 2., 0.);
+            for (int k = 0; k < waves; ++k) {
+                const double u = s + k * wave_length; // the period spans u .. u + 4r
+                // Up the leg, U-turn over the top, down the leg.
+                arc(u + 2. * r, height - r, PI, 0.);
+                if (k + 1 < waves)
+                    // U-turn at the bottom, touching the shield line, into the next period.
+                    arc(u + 4. * r, r, PI, 2. * PI);
+            }
+            // Rounded exit back onto the shield line.
+            arc(s + waves * wave_length, r, PI, 1.5 * PI);
+        }
     }
     Polygon result(std::move(out));
     result.remove_duplicate_points();
@@ -3140,7 +3159,7 @@ void Print::_make_skirt()
         // obstacle here; it may merge nearby items, but does not emit anything.
         std::vector<SkirtBrimGroupItem> group_items;
         const coord_t grouping_offset = scale_(m_config.skirt_distance.value + (m_config.skirt_loops.value + draft_shield_brim_loops) * spacing +
-                                               (draft_shield_waves_enabled ? m_config.draft_shield_wave_amplitude.value : 0.));
+                                               (draft_shield_waves_enabled ? std::max(m_config.draft_shield_wave_amplitude.value, 0.5 * m_config.draft_shield_wave_length.value) : 0.));
         for (const ObjectSkirtHull& object_hull : object_convex_hulls) {
             PrintObject* object = object_hull.object;
             std::vector<size_t> object_item_indices;

@@ -581,11 +581,11 @@ TEST_CASE("Draft shield waves sit on the long sides next to the sharp corners", 
     REQUIRE(rounded.size() == 1);
     const Polygon &loop = rounded.front();
 
-    constexpr double amplitude = 2., wave_length = 10.;
+    constexpr double amplitude = 6., wave_length = 6.;
     SECTION("disabled with zero amplitude") {
         CHECK(draft_shield_waves(loop, 0., wave_length, 2).points.size() == loop.points.size());
     }
-    SECTION("two bumps next to each of the four outer corners") {
+    SECTION("two serpentine periods next to each of the four outer corners") {
         const Polygon wavy = draft_shield_waves(loop, amplitude, wave_length, 2);
         // Outward only: the wavy loop contains the original one.
         double inside_area = 0.;
@@ -609,8 +609,8 @@ TEST_CASE("Draft shield waves sit on the long sides next to the sharp corners", 
             for (size_t c = 1; c < outer_corners.size(); ++c)
                 if ((bump - outer_corners[c]).cast<double>().norm() < (bump - outer_corners[nearest]).cast<double>().norm())
                     nearest = c;
-            // Within corner gap + two bumps of the corner, far from the shallow bend.
-            CHECK(unscaled((bump - outer_corners[nearest]).cast<double>().norm()) < 3. + 2.5 + 2. * wave_length);
+            // Within corner gap + two periods of the corner, far from the shallow bend.
+            CHECK(unscaled((bump - outer_corners[nearest]).cast<double>().norm()) < 3. + amplitude + 2.25 * wave_length);
             CHECK(unscaled((bump - bend).cast<double>().norm()) > 40.);
             ++per_corner[nearest];
             // On the long sides, not on the 20 mm ends.
@@ -653,13 +653,13 @@ TEST_CASE("Wavy draft shield walls stay parallel and keep the object gap", "[Ski
 {
     DynamicPrintConfig config = draft_shield_brim_config(3.);
     config.set_deserialize_strict({
-        { "draft_shield_wave_amplitude", 2 },
-        { "draft_shield_wave_length",    10 },
+        { "draft_shield_wave_amplitude", 6 },
+        { "draft_shield_wave_length",    6 },
         { "draft_shield_wave_count",     2 },
     });
     Print print;
     Model model;
-    TriangleMesh box(its_make_cube(60., 20., 5.));
+    TriangleMesh box(its_make_cube(60., 15., 5.)); // ends clearly shorter than a third of the long sides
     Slic3r::Test::init_print({ box }, print, model, config);
     print.process();
     REQUIRE(print.skirt_brim_groups().size() == 1);
@@ -694,8 +694,8 @@ TEST_CASE("Wavy draft shield walls stay parallel and keep the object gap", "[Ski
         max_gap = std::max(max_gap, unscaled(distance_to_outline(object, pt)));
     }
     CHECK(min_gap > 3. + spacing / 2. - 0.05);
-    // The bumps are there: 2 per corner on the 60 mm sides, none on the 20 mm ends.
-    CHECK(max_gap > 3. + spacing / 2. + 1.9);
+    // The serpentines are there: 2 periods per corner on the 60 mm sides, none on the 15 mm ends.
+    CHECK(max_gap > 3. + spacing / 2. + 5.9);
     CHECK(bumps_outside(inner, object_box.inflated(scaled(3. + spacing / 2.)).polygon(), scaled(1.)).size() == 8);
     // The second wall follows the first at one line spacing everywhere.
     double max_deviation = 0.;

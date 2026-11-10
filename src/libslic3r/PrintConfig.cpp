@@ -5187,28 +5187,30 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("draft_shield_wave_amplitude", coFloat);
     def->label = L("Draft shield wave amplitude");
-    def->tooltip = L("Height of outward bumps in the long sides of the draft shield, next to its sharp corners. "
-                     "The bumps work as expansion joints: a shrinking shield bends them instead of pulling its corners off the bed, "
-                     "which helps with warping materials such as ABS/ASA. The shield never gets closer to the object.\n"
+    def->tooltip = L("How far outward serpentines in the long sides of the draft shield reach, next to its sharp corners. "
+                     "A serpentine of U-turns works as a soft expansion joint: a shrinking shield bends its legs instead of "
+                     "pulling its corners off the bed, which helps with warping materials such as ABS/ASA. The shield never "
+                     "gets closer to the object. At least half the wave length is used.\n"
                      "Set to 0 to disable.");
     def->sidetext = L("mm");
     def->min = 0;
-    def->max = 10;
+    def->max = 20;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.));
 
     def = this->add("draft_shield_wave_length", coFloat);
     def->label = L("Draft shield wave length");
-    def->tooltip = L("Length of one bump along the draft shield side.");
+    def->tooltip = L("Length along the draft shield side of one serpentine period (out and back). Its U-turns have a radius "
+                     "of a quarter of it, so the legs stand half of it apart.");
     def->sidetext = L("mm");
     def->min = 2;
     def->max = 100;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(10.));
+    def->set_default_value(new ConfigOptionFloat(6.));
 
     def = this->add("draft_shield_wave_count", coInt);
     def->label = L("Draft shield waves per corner");
-    def->tooltip = L("Number of bumps in a row next to each sharp corner of the draft shield. Fewer are used where the side is too short.");
+    def->tooltip = L("Number of serpentine periods next to each sharp corner of the draft shield. Fewer are used where the side is too short.");
     def->min = 1;
     def->max = 20;
     def->mode = comAdvanced;
